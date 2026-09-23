@@ -14,6 +14,67 @@ from .config import DATASETS, OCEAN_FEATURE_COLUMNS
 ProgressCallback = Callable[[int, int, str], None]
 
 
+def _cache_matches(
+    cached: pd.DataFrame,
+    requested: pd.DataFrame,
+) -> bool:
+    keys = [
+        "source_row_id",
+        "date",
+        "lat",
+        "lon",
+    ]
+    if any(
+        col not in cached.columns
+        for col in keys
+    ):
+        return False
+
+    left = (
+        cached[keys]
+        .copy()
+        .sort_values("source_row_id")
+        .reset_index(drop=True)
+    )
+    right = (
+        requested[keys]
+        .copy()
+        .sort_values("source_row_id")
+        .reset_index(drop=True)
+    )
+
+    if len(left) != len(right):
+        return False
+
+    left["date"] = pd.to_datetime(
+        left["date"],
+        errors="coerce",
+    )
+    right["date"] = pd.to_datetime(
+        right["date"],
+        errors="coerce",
+    )
+
+    return (
+        left["source_row_id"].equals(
+            right["source_row_id"]
+        )
+        and left["date"].equals(
+            right["date"]
+        )
+        and np.allclose(
+            left["lat"].to_numpy(float),
+            right["lat"].to_numpy(float),
+            equal_nan=True,
+        )
+        and np.allclose(
+            left["lon"].to_numpy(float),
+            right["lon"].to_numpy(float),
+            equal_nan=True,
+        )
+    )
+
+
 def _import_copernicusmarine():
     try:
         import copernicusmarine
@@ -508,11 +569,21 @@ def build_ocean_feature_store(
         if progress:
             progress(index, total, label)
 
+        use_cache = False
+        part = None
+
         if cache_path.exists() and not force:
-            part = pd.read_parquet(
+            cached = pd.read_parquet(
                 cache_path
             )
-        else:
+            if _cache_matches(
+                cached,
+                chunk,
+            ):
+                part = cached
+                use_cache = True
+
+        if not use_cache:
             part = extract_chunk(
                 chunk.reset_index(drop=True)
             )
