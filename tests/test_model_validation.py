@@ -35,6 +35,7 @@ def test_experiment_catalog_contains_core_comparisons():
         "school_full",
         "school_env",
         "pa_full",
+        "paired_v2_full",
         "ocean_only",
         "ocean_full",
         "onboard_plus_ocean",
