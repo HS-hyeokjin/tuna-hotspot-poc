@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.idea/
+.vscode/
+
+# Internal / raw data - DO NOT COMMIT
+/data/*
+!/data/README.md
+!/data/.gitkeep
+*.xlsx
+*.xls
+*.csv
+
+# Generated artifacts
+/models/*
+!/models/.gitkeep
+/outputs/*
+!/outputs/.gitkeep
+*.cbm
+*.joblib
