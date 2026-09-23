@@ -66,6 +66,8 @@ def derive_method(row: pd.Series) -> str:
 
 def preprocess_fishing_data(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()
+    # 외부 해양 특징과 재결합하기 위한 원본 행 식별자
+    df["source_row_id"] = np.arange(len(df), dtype=int)
 
     for col in ["vessel", "captain", "fishing_ground", "lat_raw", "lon_raw"]:
         df[col] = df[col].astype("string").str.strip()
