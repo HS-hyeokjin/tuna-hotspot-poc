@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/v0.2-model-validation
+      - feature/v0.3-ocean-data
   pull_request:
     branches:
       - main
