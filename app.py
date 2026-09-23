@@ -28,13 +28,21 @@ from src.model_validation import (
     run_species_suite,
     walk_forward_validate,
 )
+from src.ocean.config import (
+    OCEAN_FEATURE_COLUMNS,
+    dataset_catalog_rows,
+)
+from src.ocean.store import (
+    DEFAULT_FEATURE_PATH,
+    attach_feature_store,
+)
 from src.preprocessing import (
     preprocess_fishing_data,
     quality_report,
 )
 
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
 
 st.set_page_config(
@@ -45,14 +53,13 @@ st.set_page_config(
 
 st.title("🐟 Tuna Hotspot AI PoC")
 st.caption(
-    f"v{APP_VERSION} · Model Validation · "
+    f"v{APP_VERSION} · Copernicus Ocean Data · "
     "어장 예측 가능성 검증 PoC"
 )
 st.info(
-    "V2의 핵심 질문은 '조업방법·선박·선장 효과를 제거하고도 "
-    "위치·수온·조류에 어획 신호가 남는가?'입니다. "
-    "이 화면의 점수는 미래 어획을 보장하지 않으며, "
-    "외부 해양예보 데이터를 추가할 가치가 있는지 판단하기 위한 검증 결과입니다."
+    "V3는 기존 조업기록에 Copernicus Marine의 SST·해류·SSH·"
+    "Chlorophyll-a·SST Gradient를 결합해 V2 대비 실제 성능이 "
+    "개선되는지 검증합니다. 이 결과는 미래 어획을 보장하는 값이 아닙니다."
 )
 
 
@@ -150,6 +157,49 @@ except Exception as exc:
     )
     st.stop()
 
+ocean_loaded = False
+ocean_coverage = pd.DataFrame()
+ocean_load_error = None
+ocean_signature = None
+
+if DEFAULT_FEATURE_PATH.exists():
+    try:
+        df, ocean_coverage = attach_feature_store(
+            df,
+            DEFAULT_FEATURE_PATH,
+        )
+        ocean_loaded = True
+        ocean_signature = (
+            DEFAULT_FEATURE_PATH
+            .stat()
+            .st_mtime_ns
+        )
+    except Exception as exc:
+        ocean_load_error = str(exc)
+
+with st.sidebar:
+    st.divider()
+    st.header("Copernicus")
+    if ocean_loaded:
+        st.success(
+            "외부 해양 특징 결합됨"
+        )
+        st.caption(
+            str(DEFAULT_FEATURE_PATH)
+        )
+    elif ocean_load_error:
+        st.error(
+            "외부 특징 파일 로딩 실패"
+        )
+        st.caption(ocean_load_error)
+    else:
+        st.info(
+            "외부 특징 파일 없음"
+        )
+        st.caption(
+            "Ocean Data 탭의 명령으로 생성하세요."
+        )
+
 
 with st.sidebar:
     st.divider()
@@ -223,6 +273,7 @@ data_signature = (
     tuple(selected_years),
     tuple(selected_methods),
     tuple(selected_vessels),
+    ocean_signature,
 )
 
 summary = kpi_summary(filtered)
@@ -233,6 +284,7 @@ summary = kpi_summary(filtered)
     tab_species,
     tab_method,
     tab_hotspot,
+    tab_ocean,
     tab_lab,
     tab_walk,
 ) = st.tabs(
@@ -242,6 +294,7 @@ summary = kpi_summary(filtered)
         "어종 분석",
         "조업방법/CPUE",
         "Historical Hotspot",
+        "Ocean Data",
         "AI 실험실",
         "Walk-forward",
     ]
@@ -654,6 +707,161 @@ with tab_hotspot:
         )
 
 
+with tab_ocean:
+    st.subheader(
+        "Copernicus Marine 외부 해양데이터"
+    )
+
+    st.dataframe(
+        pd.DataFrame(
+            dataset_catalog_rows()
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if ocean_loaded:
+        st.success(
+            "외부 특징 파일이 현재 조업데이터에 결합되어 있습니다."
+        )
+
+        if not ocean_coverage.empty:
+            st.markdown(
+                "### Feature Coverage"
+            )
+            st.dataframe(
+                ocean_coverage,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        available = [
+            col
+            for col in OCEAN_FEATURE_COLUMNS
+            if col in filtered.columns
+            and filtered[col].notna().any()
+        ]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric(
+            "해양 Feature",
+            f"{len(available)} / {len(OCEAN_FEATURE_COLUMNS)}",
+        )
+        if "ocean_sst" in filtered:
+            c2.metric(
+                "SST 연결",
+                f"{filtered['ocean_sst'].notna().mean():.1%}",
+            )
+        if "ocean_chl" in filtered:
+            c3.metric(
+                "Chl-a 연결",
+                f"{filtered['ocean_chl'].notna().mean():.1%}",
+            )
+
+        if (
+            "ocean_sst" in filtered
+            and filtered["ocean_sst"].notna().any()
+            and filtered["water_temp"].notna().any()
+        ):
+            compare = filtered[
+                filtered["ocean_sst"].notna()
+                & filtered["water_temp"].notna()
+                & filtered["water_temp"].between(
+                    5,
+                    40,
+                )
+            ].copy()
+
+            if not compare.empty:
+                compare["sst_gap"] = (
+                    compare["water_temp"]
+                    - compare["ocean_sst"]
+                )
+
+                st.markdown(
+                    "### 선박 기록 수온 vs Copernicus SST"
+                )
+                c1, c2, c3 = st.columns(3)
+                c1.metric(
+                    "비교 건수",
+                    f"{len(compare):,}",
+                )
+                c2.metric(
+                    "평균 차이",
+                    f"{compare['sst_gap'].mean():.2f} ℃",
+                )
+                c3.metric(
+                    "차이 중앙값",
+                    f"{compare['sst_gap'].median():.2f} ℃",
+                )
+
+                sst_fig = px.scatter(
+                    compare.sample(
+                        min(
+                            len(compare),
+                            1500,
+                        ),
+                        random_state=42,
+                    ),
+                    x="ocean_sst",
+                    y="water_temp",
+                    hover_data=[
+                        "date",
+                        "vessel",
+                        "fishing_ground",
+                    ],
+                    title=(
+                        "Copernicus SST와 "
+                        "조업일지 수온 비교"
+                    ),
+                )
+                st.plotly_chart(
+                    sst_fig,
+                    use_container_width=True,
+                )
+
+        feature_cols = [
+            "date",
+            "vessel",
+            "lat",
+            "lon",
+            *available,
+        ]
+        with st.expander(
+            "외부 특징 데이터 예시"
+        ):
+            st.dataframe(
+                filtered[
+                    feature_cols
+                ].dropna(
+                    how="all",
+                    subset=available,
+                ).head(100),
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.warning(
+            "아직 외부 특징 파일이 없습니다. "
+            "Copernicus 로그인 성공 상태에서 아래 명령을 실행하세요."
+        )
+        st.code(
+            "python scripts/build_ocean_features.py --limit 100",
+            language="powershell",
+        )
+        st.caption(
+            "먼저 100건으로 연결을 확인한 뒤 문제가 없으면 전체 생성합니다."
+        )
+        st.code(
+            "python scripts/build_ocean_features.py",
+            language="powershell",
+        )
+        st.caption(
+            "완료 파일: "
+            "data/external/processed/fishing_ocean_features.parquet"
+        )
+
+
 with tab_lab:
     st.subheader(
         "AI 실험실 · 모델 분리 검증"
@@ -687,7 +895,7 @@ with tab_lab:
         key="run_v2_suite",
     ):
         with st.spinner(
-            "5개 실험 모델 학습 및 검증 중..."
+            "V2/V3 실험 모델 학습 및 검증 중..."
         ):
             suite_summary, suite_results = (
                 run_experiment_suite(
