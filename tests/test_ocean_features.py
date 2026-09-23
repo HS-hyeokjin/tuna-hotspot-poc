@@ -1,6 +1,7 @@
 import pandas as pd
 
 from src.ocean.extractor import (
+    _cache_matches,
     _normalise_points,
     feature_coverage,
     merge_ocean_features,
@@ -69,3 +70,31 @@ def test_feature_coverage():
     ].iloc[0]
 
     assert row["coverage_pct"] == 50.0
+
+
+def test_cache_matches_requires_same_rows_and_coordinates():
+    requested = pd.DataFrame(
+        {
+            "source_row_id": [1, 2],
+            "date": pd.to_datetime(
+                ["2026-01-01", "2026-01-02"]
+            ),
+            "lat": [-5.0, -6.0],
+            "lon": [170.0, 171.0],
+        }
+    )
+    cached = requested.copy()
+    cached["ocean_sst"] = [29.0, 28.0]
+
+    assert _cache_matches(
+        cached,
+        requested,
+    )
+
+    changed = requested.copy()
+    changed.loc[1, "lon"] = 172.0
+
+    assert not _cache_matches(
+        cached,
+        changed,
+    )
