@@ -40,7 +40,14 @@ def method_summary(df: pd.DataFrame) -> pd.DataFrame:
     work = df[df["is_set"]].copy()
     if work.empty:
         return pd.DataFrame(
-            columns=["method", "records", "sets", "catch_total", "success_rate", "mean_cpue"]
+            columns=[
+                "method",
+                "records",
+                "sets",
+                "catch_total",
+                "success_rate",
+                "mean_cpue",
+            ]
         )
 
     return (
@@ -56,16 +63,81 @@ def method_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def hotspot_grid(df: pd.DataFrame, min_sets: int = 3) -> pd.DataFrame:
+def daily_species_consistency(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """당일 총어획량과 어종별 합계를 선박·일자 단위로 비교한다.
+
+    원본의 '당일' 정의가 실제 일일 총어획량이라는 전제는 아직
+    현업 확인이 필요하므로, 이 결과는 데이터 정의 확인용이다.
+    """
     work = df[
-        df["is_set"] & df["lat_grid"].notna() & df["lon_grid"].notna()
+        df["date"].notna()
+        & df["vessel"].notna()
+    ].copy()
+
+    if work.empty:
+        return pd.DataFrame()
+
+    grouped = (
+        work.groupby(
+            ["date", "vessel"],
+            as_index=False,
+        )
+        .agg(
+            official_daily=("daily", "max"),
+            species_sum=("catch_total", "sum"),
+            set_count=("set_count", "sum"),
+            records=("date", "size"),
+        )
+    )
+
+    grouped = grouped[
+        grouped["official_daily"].notna()
+    ].copy()
+
+    if grouped.empty:
+        return grouped
+
+    grouped["difference"] = (
+        grouped["official_daily"]
+        - grouped["species_sum"]
+    )
+    grouped["abs_difference"] = (
+        grouped["difference"].abs()
+    )
+    grouped["exact_match"] = (
+        grouped["abs_difference"] < 1e-9
+    )
+
+    return grouped.sort_values(
+        "abs_difference",
+        ascending=False,
+    ).reset_index(drop=True)
+
+
+def hotspot_grid(
+    df: pd.DataFrame,
+    min_sets: int = 3,
+) -> pd.DataFrame:
+    work = df[
+        df["is_set"]
+        & df["lat_grid"].notna()
+        & df["lon_grid"].notna()
     ].copy()
 
     if work.empty:
         return pd.DataFrame()
 
     result = (
-        work.groupby(["lat_grid", "lon_grid", "grid_id"], as_index=False)
+        work.groupby(
+            [
+                "lat_grid",
+                "lon_grid",
+                "grid_id",
+            ],
+            as_index=False,
+        )
         .agg(
             records=("date", "size"),
             sets=("set_count", "sum"),
@@ -77,17 +149,31 @@ def hotspot_grid(df: pd.DataFrame, min_sets: int = 3) -> pd.DataFrame:
         )
     )
 
-    result = result[result["sets"] >= min_sets].copy()
+    result = result[
+        result["sets"] >= min_sets
+    ].copy()
     if result.empty:
         return result
 
-    result["success_rate"] = result["successes"] / result["records"].clip(lower=1)
+    result["success_rate"] = (
+        result["successes"]
+        / result["records"].clip(lower=1)
+    )
 
-    # V1 Historical score. 미래 예측 점수가 아니라 과거 성과 탐색용.
+    # 과거 성과 탐색용 점수이며 미래예측 점수가 아니다.
     result["historical_score"] = (
-        result["success_rate"].rank(pct=True) * 0.45
-        + result["mean_cpue"].rank(pct=True) * 0.45
-        + result["sets"].rank(pct=True) * 0.10
+        result["success_rate"].rank(pct=True)
+        * 0.45
+        + result["mean_cpue"].rank(pct=True)
+        * 0.45
+        + result["sets"].rank(pct=True)
+        * 0.10
     ) * 100
 
-    return result.sort_values("historical_score", ascending=False).reset_index(drop=True)
+    return (
+        result.sort_values(
+            "historical_score",
+            ascending=False,
+        )
+        .reset_index(drop=True)
+    )
