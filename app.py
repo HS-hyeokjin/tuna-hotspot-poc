@@ -820,25 +820,31 @@ with tab_ocean:
                     use_container_width=True,
                 )
 
-        feature_cols = [
-            "date",
-            "vessel",
-            "lat",
-            "lon",
-            *available,
-        ]
-        with st.expander(
-            "외부 특징 데이터 예시"
-        ):
-            st.dataframe(
-                filtered[
-                    feature_cols
-                ].dropna(
-                    how="all",
-                    subset=available,
-                ).head(100),
-                use_container_width=True,
-                hide_index=True,
+        if available:
+            feature_cols = [
+                "date",
+                "vessel",
+                "lat",
+                "lon",
+                *available,
+            ]
+            with st.expander(
+                "외부 특징 데이터 예시"
+            ):
+                st.dataframe(
+                    filtered[
+                        feature_cols
+                    ].dropna(
+                        how="all",
+                        subset=available,
+                    ).head(100),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.warning(
+                "외부 특징 파일은 있으나 유효한 해양 Feature가 없습니다. "
+                "생성 로그의 ocean_error를 확인하세요."
             )
     else:
         st.warning(
