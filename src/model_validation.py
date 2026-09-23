@@ -30,6 +30,24 @@ CONTEXT_FEATURES = [
     "fishing_ground",
 ]
 
+OCEAN_FEATURES = [
+    "ocean_sst",
+    "ocean_current_u",
+    "ocean_current_v",
+    "ocean_current_speed",
+    "ocean_ssh",
+    "ocean_chl",
+    "ocean_sst_gradient_c_per_100km",
+]
+
+OCEAN_ENV_FEATURES = [
+    "lat",
+    "lon",
+    "month",
+    "quarter",
+    *OCEAN_FEATURES,
+]
+
 SPECIES_TARGETS = {
     "전체 어획": "catch_total",
     "S/J": "catch_sj",
@@ -115,6 +133,53 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
             + CONTEXT_FEATURES
         ),
         cat_features=tuple(CONTEXT_FEATURES),
+    ),
+    "ocean_only": ExperimentSpec(
+        key="ocean_only",
+        label="외부 해양 · 환경 Only",
+        description=(
+            "Copernicus SST·해류·SSH·Chl-a·SST Gradient와 "
+            "위치·계절만 사용"
+        ),
+        method_filter=None,
+        features=tuple(OCEAN_ENV_FEATURES),
+        cat_features=(),
+    ),
+    "ocean_full": ExperimentSpec(
+        key="ocean_full",
+        label="외부 해양 · 모든 변수",
+        description=(
+            "Copernicus 해양 특징에 선박·선장·어장·조업방법까지 결합"
+        ),
+        method_filter=None,
+        features=tuple(
+            OCEAN_ENV_FEATURES
+            + CONTEXT_FEATURES
+            + ["method"]
+        ),
+        cat_features=tuple(
+            CONTEXT_FEATURES
+            + ["method"]
+        ),
+    ),
+    "onboard_plus_ocean": ExperimentSpec(
+        key="onboard_plus_ocean",
+        label="기존 + 외부 해양 · 모든 변수",
+        description=(
+            "기존 수온·조류와 Copernicus 해양 특징을 함께 사용해 "
+            "V2 대비 추가 정보의 개선폭을 확인"
+        ),
+        method_filter=None,
+        features=tuple(
+            ENV_FEATURES
+            + OCEAN_FEATURES
+            + CONTEXT_FEATURES
+            + ["method"]
+        ),
+        cat_features=tuple(
+            CONTEXT_FEATURES
+            + ["method"]
+        ),
     ),
 }
 
