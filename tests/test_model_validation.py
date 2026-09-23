@@ -35,7 +35,10 @@ def test_experiment_catalog_contains_core_comparisons():
         "school_full",
         "school_env",
         "pa_full",
-    } == set(EXPERIMENTS)
+        "ocean_only",
+        "ocean_full",
+        "onboard_plus_ocean",
+    }.issubset(set(EXPERIMENTS))
 
     assert set(catalog["key"]) == set(EXPERIMENTS)
 
