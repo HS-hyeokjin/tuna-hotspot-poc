@@ -11,6 +11,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,4 +33,4 @@ jobs:
         run: python -m compileall app.py src tests
 
       - name: Test
-        run: pytest -q
+        run: python -m pytest -q
