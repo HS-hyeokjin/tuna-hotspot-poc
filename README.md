@@ -1,89 +1,113 @@
 # tuna-hotspot-poc
 
-참치 선망 조업데이터에서 **어장 탐색에 활용할 수 있는 신호가 실제로 존재하는지 검증**하기 위한 Python PoC입니다.
+참치 선망 조업데이터와 외부 해양환경 데이터를 이용해 **어장 탐색에 활용할 수 있는 신호가 실제로 존재하는지 검증**하는 Python PoC입니다.
 
-> 이 프로젝트는 "내일 특정 좌표에서 몇 톤 잡힌다"를 확정 예측하는 시스템이 아닙니다.
-> 과거 조업데이터의 품질과 패턴을 검증하고, 어떤 데이터가 실제로 예측력을 추가하는지 확인하는 연구용 PoC입니다.
+> 이 프로젝트는 특정 좌표의 미래 어획량을 확정하는 시스템이 아닙니다.
+> 시간분할 검증으로 어떤 데이터가 실제 예측력을 추가하는지 단계적으로 확인합니다.
 
 ## 현재 브랜치
 
-`feature/v0.2-model-validation`
+`feature/v0.3-ocean-data`
 
-V2에서는 V1의 단일 CatBoost 결과가 실제 어장/환경 신호인지, 아니면 조업방법·선박·선장 효과를 학습한 결과인지 분리해서 검증합니다.
+- `main`: V1 baseline
+- `feature/v0.2-model-validation`: 조업방법/선박/선장 효과 분리 검증
+- `feature/v0.3-ocean-data`: Copernicus Marine 외부 해양데이터 결합
 
-## v0.2.0 핵심 기능
+병합은 하지 않고 버전별 브랜치로 관리합니다.
 
-- 전체 모델 vs 위치/환경 Only 모델 비교
-- School Fish 단독 모델
-- School Fish 위치/환경 Only 모델
-- PA 단독 모델
-- S/J · Y/F · B/E 어종별 모델 비교
-- ROC-AUC / PR-AUC / Brier Score
+## V3 핵심
+
+Copernicus Marine의 다음 일자료를 조업 날짜·좌표에 결합합니다.
+
+- SST
+- Current U/V
+- Current speed / direction
+- Sea Surface Height
+- Chlorophyll-a
+- SST Gradient 근사치
+
+그리고 동일한 검증 방식으로 아래를 비교합니다.
+
+1. V2 기존 변수 모델
+2. 외부 해양 환경 Only
+3. 외부 해양 + 선박/선장/조업방법
+4. 기존 수온/조류 + 외부 해양 전체
+
+평가지표:
+
+- ROC-AUC
+- PR-AUC
+- Brier Score
 - MAE / Median AE
-- Top 10% · 20% Catch Lift
-- CatBoost Feature Importance
-- SHAP Global Importance
-- SHAP 변수별 방향 확인
-- 연도별 Walk-forward validation
-- 당일 총어획량 vs 어종별 합계 데이터 정의 점검
-- 기존 Historical Hotspot / CPUE 분석 유지
+- Top 10% / 20% Catch Lift
+- SHAP
+- Walk-forward validation
 
-자세한 검증 설계는 `docs/V0.2_MODEL_VALIDATION.md`를 참고하세요.
+## 설치
 
-## 브랜치 실행
+Python 3.11 권장.
 
     git fetch origin
-    git switch feature/v0.2-model-validation
-
-Windows:
-
-    run.bat
-
-직접 실행:
+    git switch feature/v0.3-ocean-data
 
     python -m venv .venv
     .venv\Scripts\activate
     pip install -r requirements.txt
-    streamlit run app.py
 
-## 데이터
+Copernicus Marine 로그인이 아직 저장되지 않았다면:
 
-화면에서 Excel을 업로드하거나 로컬에 다음 파일을 배치합니다.
+    copernicusmarine login
+
+## 1. 조업데이터
+
+화면 업로드 또는 로컬에 배치:
 
     data/선망_조업보고 데이터.xlsx
 
-## 보안
+회사 원본 데이터는 GitHub에 커밋하지 않습니다.
 
-**회사 조업 원본 데이터는 GitHub에 올리지 않습니다.**
+## 2. 외부 해양데이터 생성
 
-`.gitignore`가 원본 데이터, CSV/XLSX 및 모델 산출물을 차단합니다.
+먼저 100건 연결 테스트:
 
-## 해석 시 주의
+    python scripts/build_ocean_features.py --limit 100
 
-현재 조업일지는 선장이 이미 후보 어장을 선택한 이후의 기록이므로 selection bias가 있습니다.
+정상 확인 후 전체:
 
-또한 아직 정의 확인이 필요한 항목이 있습니다.
+    python scripts/build_ocean_features.py
 
-- PA
-- S/H (PS)
-- Y/F (PS)
-- Y/F (GG)
-- 중량구간(+7.5, +4, +3, -3)의 정확한 범위
-- 조류 컬럼의 단위 및 의미
-- 당일 어획량과 어종별 합계의 관계
+생성 파일:
 
-V2에서는 이러한 미확정 정의를 임의로 확정하지 않습니다.
+    data/external/processed/fishing_ocean_features.parquet
 
-## V3 후보
+월/공간 블록별 캐시:
 
-V2에서 위치·환경 신호가 유효하다고 판단되면 다음 데이터를 날짜/좌표 기준으로 결합합니다.
+    data/external/cache/
 
-    SST
-    SST Gradient
-    Chlorophyll-a
-    Current U/V
-    Sea Surface Height / Eddy
-    Wind
-    Wave
+기존 캐시를 무시하고 새로 조회:
 
-그 후 동일한 Walk-forward 검증으로 **외부 데이터를 추가했을 때 실제 성능이 개선되는지** 비교합니다.
+    python scripts/build_ocean_features.py --force
+
+## 3. 실행
+
+    streamlit run app.py
+
+Ocean Data 탭에서 외부 데이터 Coverage와 조업일지 수온/Copernicus SST 비교를 먼저 확인하세요.
+
+그 다음 AI 실험실에서 V2/V3 모델을 동일 조건으로 비교합니다.
+
+## 날짜변경선
+
+조업좌표가 E/W 180도 부근을 오가므로 전체 좌표를 하나의 최소/최대 경도 bbox로 요청하지 않습니다.
+
+V3는 월별 + 20도 공간 블록으로 Copernicus 요청을 분할해 날짜변경선 문제와 과도한 다운로드를 줄입니다.
+
+## 문서
+
+- `docs/V0.2_MODEL_VALIDATION.md`
+- `docs/V0.3_OCEAN_DATA.md`
+
+## 다음 단계
+
+V3에서 외부 해양데이터의 성능 개선이 확인된 경우에만 V4에서
+Copernicus +24h/+48h forecast 기반 후보 해역 Ranking으로 확장합니다.
