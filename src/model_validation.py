@@ -48,6 +48,13 @@ OCEAN_ENV_FEATURES = [
     *OCEAN_FEATURES,
 ]
 
+OCEAN_CORE_FEATURES = [
+    "ocean_sst",
+    "ocean_current_speed",
+    "ocean_ssh",
+    "ocean_chl",
+]
+
 SPECIES_TARGETS = {
     "전체 어획": "catch_total",
     "S/J": "catch_sj",
@@ -64,6 +71,7 @@ class ExperimentSpec:
     method_filter: str | None
     features: tuple[str, ...]
     cat_features: tuple[str, ...]
+    required_non_null_features: tuple[str, ...] = ()
 
 
 @dataclass
@@ -134,6 +142,27 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         ),
         cat_features=tuple(CONTEXT_FEATURES),
     ),
+    "paired_v2_full": ExperimentSpec(
+        key="paired_v2_full",
+        label="동일표본 V2 · 모든 변수",
+        description=(
+            "Copernicus 핵심 특징이 모두 존재하는 동일 행만 사용해 "
+            "외부 데이터 모델과 공정하게 비교하는 V2 기준선"
+        ),
+        method_filter=None,
+        features=tuple(
+            ENV_FEATURES
+            + CONTEXT_FEATURES
+            + ["method"]
+        ),
+        cat_features=tuple(
+            CONTEXT_FEATURES
+            + ["method"]
+        ),
+        required_non_null_features=tuple(
+            OCEAN_CORE_FEATURES
+        ),
+    ),
     "ocean_only": ExperimentSpec(
         key="ocean_only",
         label="외부 해양 · 환경 Only",
@@ -144,6 +173,9 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         method_filter=None,
         features=tuple(OCEAN_ENV_FEATURES),
         cat_features=(),
+        required_non_null_features=tuple(
+            OCEAN_CORE_FEATURES
+        ),
     ),
     "ocean_full": ExperimentSpec(
         key="ocean_full",
@@ -160,6 +192,9 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         cat_features=tuple(
             CONTEXT_FEATURES
             + ["method"]
+        ),
+        required_non_null_features=tuple(
+            OCEAN_CORE_FEATURES
         ),
     ),
     "onboard_plus_ocean": ExperimentSpec(
@@ -179,6 +214,9 @@ EXPERIMENTS: dict[str, ExperimentSpec] = {
         cat_features=tuple(
             CONTEXT_FEATURES
             + ["method"]
+        ),
+        required_non_null_features=tuple(
+            OCEAN_CORE_FEATURES
         ),
     ),
 }
@@ -217,7 +255,12 @@ def _prepare_frame(
             work["method"] == spec.method_filter
         ].copy()
 
-    required = ["date", target_col, *spec.features]
+    required = [
+        "date",
+        target_col,
+        *spec.features,
+        *spec.required_non_null_features,
+    ]
     missing = [
         col
         for col in required
@@ -232,6 +275,13 @@ def _prepare_frame(
     work = work.dropna(
         subset=["date", "lat", "lon"]
     )
+
+    if spec.required_non_null_features:
+        work = work.dropna(
+            subset=list(
+                spec.required_non_null_features
+            )
+        )
     work = work.sort_values("date").reset_index(
         drop=True
     )
