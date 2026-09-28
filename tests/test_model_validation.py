@@ -2,9 +2,11 @@ import numpy as np
 import pandas as pd
 
 from src.model_validation import (
+    ABLATION_GROUPS,
     EXPERIMENTS,
     experiment_catalog,
     run_experiment,
+    run_ocean_ablation,
     top_k_lift,
 )
 
@@ -114,3 +116,81 @@ def test_run_experiment_smoke():
     assert result.metrics["roc_auc"] > 0.5
     assert not result.shap_importance.empty
     assert "model_score" in result.scored_test
+
+
+
+def test_ocean_ablation_uses_paired_sample():
+    rng = np.random.default_rng(7)
+    train_dates = pd.date_range(
+        "2025-01-01",
+        periods=240,
+        freq="D",
+    )
+    test_dates = pd.date_range(
+        "2026-01-01",
+        periods=80,
+        freq="D",
+    )
+    dates = train_dates.append(test_dates)
+    n = len(dates)
+
+    signal = rng.normal(size=n)
+    success = signal > -0.3
+    catch = np.where(
+        success,
+        25 + np.maximum(signal, 0) * 8,
+        0,
+    )
+
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "year": dates.year,
+            "month": dates.month,
+            "quarter": dates.quarter,
+            "lat": -5 + rng.normal(0, 2, n),
+            "lon": 170 + rng.normal(0, 3, n),
+            "water_temp": 28 + rng.normal(0, 0.5, n),
+            "current": rng.normal(0.4, 0.1, n),
+            "vessel": np.where(
+                np.arange(n) % 2 == 0,
+                "V1",
+                "V2",
+            ),
+            "captain": np.where(
+                np.arange(n) % 3 == 0,
+                "C1",
+                "C2",
+            ),
+            "fishing_ground": "A",
+            "method": "school_fish",
+            "is_set": True,
+            "catch_total": catch,
+            "ocean_sst": 28.5 + signal * 0.3,
+        }
+    )
+
+    result = run_ocean_ablation(
+        df,
+        target_col="catch_total",
+        group_keys=["sst"],
+        iterations=10,
+    )
+
+    assert len(result) == 1
+    row = result.iloc[0]
+    assert row["상태"] == "완료"
+    assert row["rows"] == 320
+    assert row["test_rows"] == 80
+    assert "delta_auc" in result.columns
+    assert "delta_top10" in result.columns
+
+
+def test_ablation_groups_have_unique_features():
+    assert "sst" in ABLATION_GROUPS
+    assert "current" in ABLATION_GROUPS
+    assert "all_ocean" in ABLATION_GROUPS
+
+    for group in ABLATION_GROUPS.values():
+        features = list(group["features"])
+        assert len(features) == len(set(features))
