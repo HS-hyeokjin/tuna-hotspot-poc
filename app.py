@@ -21,10 +21,13 @@ from src.charts import (
 from src.config import DEFAULT_DATA_PATH
 from src.loader import load_fishing_excel
 from src.model_validation import (
+    ABLATION_GROUPS,
     EXPERIMENTS,
     SPECIES_TARGETS,
     experiment_catalog,
     run_experiment_suite,
+    run_ocean_ablation,
+    run_ocean_ablation_walk_forward,
     run_species_suite,
     walk_forward_validate,
 )
@@ -35,6 +38,7 @@ from src.ocean.config import (
 from src.ocean.store import (
     DEFAULT_FEATURE_PATH,
     attach_feature_store,
+    load_feature_store,
 )
 from src.preprocessing import (
     preprocess_fishing_data,
@@ -42,7 +46,7 @@ from src.preprocessing import (
 )
 
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 
 
 st.set_page_config(
@@ -53,13 +57,13 @@ st.set_page_config(
 
 st.title("🐟 Tuna Hotspot AI PoC")
 st.caption(
-    f"v{APP_VERSION} · Copernicus Ocean Data · "
+    f"v{APP_VERSION} · Ocean Ablation · "
     "어장 예측 가능성 검증 PoC"
 )
 st.info(
-    "V3는 기존 조업기록에 Copernicus Marine의 SST·해류·SSH·"
-    "Chlorophyll-a·SST Gradient를 결합해 V2 대비 실제 성능이 "
-    "개선되는지 검증합니다. 이 결과는 미래 어획을 보장하는 값이 아닙니다."
+    "V3.1은 Copernicus 변수를 한꺼번에 넣는 데서 끝나지 않고, "
+    "SST·해류·SSH·Chl-a·SST Gradient를 개별/조합으로 추가해 "
+    "어떤 변수가 실제 AUC와 Top10 Catch Lift에 기여하는지 동일표본으로 검증합니다."
 )
 
 
@@ -82,6 +86,15 @@ def load_and_prepare(
     return preprocess_fishing_data(raw)
 
 
+@st.cache_data(show_spinner=False)
+def load_ocean_feature_view(
+    path_str: str,
+    mtime_ns: int,
+) -> pd.DataFrame:
+    _ = mtime_ns
+    return load_feature_store(path_str)
+
+
 def fmt_num(
     value,
     digits: int = 3,
@@ -102,6 +115,10 @@ def clear_model_state() -> None:
         "v2_species_signature",
         "v2_walk_forward",
         "v2_walk_forward_signature",
+        "v31_ablation_summary",
+        "v31_ablation_signature",
+        "v31_ablation_walk",
+        "v31_ablation_walk_signature",
     ]:
         st.session_state.pop(key, None)
 
@@ -285,6 +302,7 @@ summary = kpi_summary(filtered)
     tab_method,
     tab_hotspot,
     tab_ocean,
+    tab_ablation,
     tab_lab,
     tab_walk,
 ) = st.tabs(
@@ -295,6 +313,7 @@ summary = kpi_summary(filtered)
         "조업방법/CPUE",
         "Historical Hotspot",
         "Ocean Data",
+        "Ocean Ablation",
         "AI 실험실",
         "Walk-forward",
     ]
@@ -846,6 +865,119 @@ with tab_ocean:
                 "외부 특징 파일은 있으나 유효한 해양 Feature가 없습니다. "
                 "생성 로그의 ocean_error를 확인하세요."
             )
+
+        st.markdown("### Parquet Data Viewer")
+        st.caption(
+            "fishing_ocean_features.parquet 원본을 화면에서 확인합니다. "
+            "이 표는 예측결과가 아니라 조업 날짜·좌표에 붙인 AI 입력 Feature입니다."
+        )
+
+        column_guide = pd.DataFrame(
+            [
+                ["source_row_id", "원본 조업행 연결 ID", "-"],
+                ["date", "조업 날짜", "date"],
+                ["lat / lon", "조업 위도 / 경도", "degree"],
+                ["ocean_sst", "Copernicus 해수면 수온", "℃"],
+                ["ocean_current_u", "동서방향 해류 성분", "m/s"],
+                ["ocean_current_v", "남북방향 해류 성분", "m/s"],
+                ["ocean_current_speed", "U/V를 합친 해류 속력", "m/s"],
+                ["ocean_current_dir_deg", "해류 방향각", "degree"],
+                ["ocean_ssh", "해수면 높이(SSH)", "m"],
+                ["ocean_chl", "Chlorophyll-a 농도", "제품 단위"],
+                [
+                    "ocean_sst_gradient_c_per_100km",
+                    "주변 수온 변화량 근사치",
+                    "℃ / 100km",
+                ],
+                ["ocean_complete", "핵심 해양 Feature 확보 여부", "bool"],
+                ["ocean_error", "부분 조회 실패/오류 기록", "text"],
+            ],
+            columns=["컬럼", "뜻", "단위"],
+        )
+        with st.expander(
+            "컬럼 뜻 보기",
+            expanded=False,
+        ):
+            st.dataframe(
+                column_guide,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        try:
+            ocean_store = load_ocean_feature_view(
+                str(DEFAULT_FEATURE_PATH),
+                int(ocean_signature or 0),
+            )
+            view = ocean_store.copy()
+
+            c1, c2, c3 = st.columns(3)
+            complete_filter = c1.selectbox(
+                "데이터 상태",
+                ["전체", "완료만", "미완료만"],
+                key="ocean_view_complete",
+            )
+            error_only = c2.checkbox(
+                "오류 기록만",
+                value=False,
+                key="ocean_view_error_only",
+            )
+            view_limit = c3.selectbox(
+                "화면 표시 행수",
+                [50, 100, 300, 1000],
+                index=1,
+                key="ocean_view_limit",
+            )
+
+            if (
+                complete_filter != "전체"
+                and "ocean_complete" in view.columns
+            ):
+                complete_mask = (
+                    view["ocean_complete"].fillna(False)
+                    == True
+                )
+                if complete_filter == "완료만":
+                    view = view[complete_mask]
+                else:
+                    view = view[~complete_mask]
+
+            if (
+                error_only
+                and "ocean_error" in view.columns
+            ):
+                error_text = (
+                    view["ocean_error"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                )
+                view = view[error_text != ""]
+
+            st.caption(
+                f"필터 결과 {len(view):,}건 / "
+                f"전체 {len(ocean_store):,}건"
+            )
+            st.dataframe(
+                view.head(int(view_limit)),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            csv_bytes = view.to_csv(
+                index=False,
+            ).encode("utf-8-sig")
+            st.download_button(
+                "현재 필터 결과 CSV 다운로드",
+                data=csv_bytes,
+                file_name="ocean_features_filtered.csv",
+                mime="text/csv",
+                key="download_ocean_csv",
+            )
+        except Exception as exc:
+            st.error(
+                f"Parquet Viewer 로딩 실패: {exc}"
+            )
     else:
         st.warning(
             "아직 외부 특징 파일이 없습니다. "
@@ -866,6 +998,298 @@ with tab_ocean:
             "완료 파일: "
             "data/external/processed/fishing_ocean_features.parquet"
         )
+
+
+with tab_ablation:
+    st.subheader(
+        "Ocean Ablation · 어떤 해양변수가 실제로 도움됐나?"
+    )
+    st.write(
+        "각 해양변수마다 Copernicus 값이 존재하는 동일 행을 고정한 뒤, "
+        "① 기존 V2 변수만 사용한 모델과 ② 해당 해양변수를 추가한 모델을 비교합니다. "
+        "따라서 표본 차이 때문에 성능이 달라지는 문제를 줄입니다."
+    )
+    st.caption(
+        "delta_auc > 0이면 해당 해양변수 추가 후 ROC-AUC가 상승, "
+        "delta_top10 > 0이면 상위 10% 어획 후보 선별력이 상승한 것입니다. "
+        "delta_mae는 음수일수록 어획량 오차가 감소한 것입니다."
+    )
+
+    if not ocean_loaded:
+        st.warning(
+            "먼저 Ocean Data를 전체 생성해 Parquet을 연결하세요."
+        )
+    else:
+        ablation_target_label = st.selectbox(
+            "Ablation Target",
+            list(SPECIES_TARGETS.keys()),
+            index=0,
+            key="ablation_target",
+        )
+        ablation_target_col = SPECIES_TARGETS[
+            ablation_target_label
+        ]
+
+        ablation_keys = list(
+            ABLATION_GROUPS.keys()
+        )
+        selected_ablation = st.multiselect(
+            "비교할 해양변수",
+            options=ablation_keys,
+            default=ablation_keys,
+            format_func=lambda k: (
+                ABLATION_GROUPS[k]["label"]
+            ),
+            key="ablation_groups",
+        )
+
+        c1, c2 = st.columns(2)
+        run_quick = c1.button(
+            "2026 기준 Ablation 실행",
+            type="primary",
+            use_container_width=True,
+            key="run_ablation",
+        )
+        run_walk = c2.button(
+            "Walk-forward Ablation 실행",
+            use_container_width=True,
+            key="run_ablation_walk",
+        )
+
+        if not selected_ablation:
+            st.info(
+                "최소 1개 해양변수를 선택하세요."
+            )
+
+        if run_quick and selected_ablation:
+            with st.spinner(
+                "동일표본 기준 해양변수별 모델 비교 중..."
+            ):
+                ablation = run_ocean_ablation(
+                    filtered,
+                    target_col=ablation_target_col,
+                    group_keys=selected_ablation,
+                )
+            st.session_state[
+                "v31_ablation_summary"
+            ] = ablation
+            st.session_state[
+                "v31_ablation_signature"
+            ] = (
+                data_signature,
+                ablation_target_col,
+                tuple(selected_ablation),
+            )
+
+        ablation_signature = (
+            data_signature,
+            ablation_target_col,
+            tuple(selected_ablation),
+        )
+        if (
+            st.session_state.get(
+                "v31_ablation_signature"
+            )
+            == ablation_signature
+            and "v31_ablation_summary"
+            in st.session_state
+        ):
+            ablation = st.session_state[
+                "v31_ablation_summary"
+            ]
+            st.markdown(
+                "### 2026 동일표본 비교"
+            )
+            st.dataframe(
+                ablation,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            completed_ablation = ablation[
+                ablation["상태"] == "완료"
+            ].copy()
+
+            if not completed_ablation.empty:
+                auc_long = completed_ablation.melt(
+                    id_vars=["해양변수"],
+                    value_vars=[
+                        "baseline_auc",
+                        "enhanced_auc",
+                    ],
+                    var_name="모델",
+                    value_name="ROC-AUC",
+                )
+                lift_long = completed_ablation.melt(
+                    id_vars=["해양변수"],
+                    value_vars=[
+                        "baseline_top10",
+                        "enhanced_top10",
+                    ],
+                    var_name="모델",
+                    value_name="Top10 Lift",
+                )
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    auc_fig = px.bar(
+                        auc_long,
+                        x="해양변수",
+                        y="ROC-AUC",
+                        color="모델",
+                        barmode="group",
+                        title="동일표본 ROC-AUC",
+                        range_y=[0, 1],
+                    )
+                    st.plotly_chart(
+                        auc_fig,
+                        use_container_width=True,
+                    )
+                with c2:
+                    lift_fig = px.bar(
+                        lift_long,
+                        x="해양변수",
+                        y="Top10 Lift",
+                        color="모델",
+                        barmode="group",
+                        title="동일표본 Top10 Catch Lift",
+                    )
+                    lift_fig.add_hline(
+                        y=1.0,
+                        line_dash="dash",
+                        annotation_text="전체 평균",
+                    )
+                    st.plotly_chart(
+                        lift_fig,
+                        use_container_width=True,
+                    )
+
+                delta_fig = px.bar(
+                    completed_ablation,
+                    x="해양변수",
+                    y="delta_top10",
+                    title=(
+                        "해양변수 추가 전후 "
+                        "Top10 Lift 변화량"
+                    ),
+                )
+                delta_fig.add_hline(
+                    y=0,
+                    line_dash="dash",
+                )
+                st.plotly_chart(
+                    delta_fig,
+                    use_container_width=True,
+                )
+
+        if run_walk and selected_ablation:
+            with st.spinner(
+                "해양변수별 연도 Walk-forward 비교 중... "
+                "여러 모델을 반복 학습하므로 시간이 걸릴 수 있습니다."
+            ):
+                ablation_walk = (
+                    run_ocean_ablation_walk_forward(
+                        filtered,
+                        target_col=ablation_target_col,
+                        group_keys=selected_ablation,
+                    )
+                )
+            st.session_state[
+                "v31_ablation_walk"
+            ] = ablation_walk
+            st.session_state[
+                "v31_ablation_walk_signature"
+            ] = ablation_signature
+
+        if (
+            st.session_state.get(
+                "v31_ablation_walk_signature"
+            )
+            == ablation_signature
+            and "v31_ablation_walk"
+            in st.session_state
+        ):
+            ablation_walk = st.session_state[
+                "v31_ablation_walk"
+            ]
+            st.markdown(
+                "### 연도별 Walk-forward Ablation"
+            )
+            st.dataframe(
+                ablation_walk,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            completed_walk = ablation_walk[
+                ablation_walk["상태"] == "완료"
+            ].copy()
+            if not completed_walk.empty:
+                available_groups = list(
+                    completed_walk["key"]
+                    .dropna()
+                    .unique()
+                )
+                detail_group = st.selectbox(
+                    "연도별 상세 해양변수",
+                    available_groups,
+                    format_func=lambda k: (
+                        ABLATION_GROUPS[k]["label"]
+                    ),
+                    key="ablation_walk_detail",
+                )
+                detail = completed_walk[
+                    completed_walk["key"]
+                    == detail_group
+                ].copy()
+
+                detail_long = detail.melt(
+                    id_vars=["test_year"],
+                    value_vars=[
+                        "baseline_top10",
+                        "enhanced_top10",
+                    ],
+                    var_name="모델",
+                    value_name="Top10 Lift",
+                )
+                wf_fig = px.line(
+                    detail_long,
+                    x="test_year",
+                    y="Top10 Lift",
+                    color="모델",
+                    markers=True,
+                    title=(
+                        f"{ABLATION_GROUPS[detail_group]['label']} "
+                        "연도별 Top10 Lift"
+                    ),
+                )
+                wf_fig.add_hline(
+                    y=1.0,
+                    line_dash="dash",
+                    annotation_text="전체 평균",
+                )
+                st.plotly_chart(
+                    wf_fig,
+                    use_container_width=True,
+                )
+
+                delta_walk_fig = px.bar(
+                    detail,
+                    x="test_year",
+                    y="delta_top10",
+                    title=(
+                        f"{ABLATION_GROUPS[detail_group]['label']} "
+                        "추가에 따른 연도별 Lift 변화"
+                    ),
+                )
+                delta_walk_fig.add_hline(
+                    y=0,
+                    line_dash="dash",
+                )
+                st.plotly_chart(
+                    delta_walk_fig,
+                    use_container_width=True,
+                )
 
 
 with tab_lab:
@@ -1371,7 +1795,7 @@ with tab_walk:
 
 st.divider()
 st.caption(
-    "V2 판단 기준: 위치·환경 Only / School Fish 분리 모델에서도 "
-    "일관된 신호와 Top-K Lift가 남는지 확인 → 유효하면 V3에서 "
-    "SST Gradient · Chlorophyll-a · Current U/V · Eddy · Wind · Wave 결합"
+    "V3.1 판단 기준: 동일표본 Ablation과 Walk-forward에서 "
+    "특정 해양변수의 delta_auc / delta_top10이 여러 연도에 걸쳐 "
+    "반복되는지 확인합니다. 단일 연도 상승만으로 변수 효과를 확정하지 않습니다."
 )
