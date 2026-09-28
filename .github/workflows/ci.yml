@@ -5,6 +5,7 @@ on:
     branches:
       - feature/v0.2-model-validation
       - feature/v0.3-ocean-data
+      - feature/v0.3.1-ocean-ablation
   pull_request:
     branches:
       - main
