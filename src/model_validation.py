@@ -55,6 +55,68 @@ OCEAN_CORE_FEATURES = [
     "ocean_chl",
 ]
 
+ABLATION_GROUPS: dict[str, dict] = {
+    "sst": {
+        "label": "SST",
+        "features": ("ocean_sst",),
+    },
+    "current": {
+        "label": "Current",
+        "features": (
+            "ocean_current_u",
+            "ocean_current_v",
+            "ocean_current_speed",
+        ),
+    },
+    "ssh": {
+        "label": "SSH",
+        "features": ("ocean_ssh",),
+    },
+    "chlorophyll": {
+        "label": "Chl-a",
+        "features": ("ocean_chl",),
+    },
+    "sst_gradient": {
+        "label": "SST Gradient",
+        "features": (
+            "ocean_sst_gradient_c_per_100km",
+        ),
+    },
+    "sst_current": {
+        "label": "SST + Current",
+        "features": (
+            "ocean_sst",
+            "ocean_current_u",
+            "ocean_current_v",
+            "ocean_current_speed",
+        ),
+    },
+    "current_chl": {
+        "label": "Current + Chl-a",
+        "features": (
+            "ocean_current_u",
+            "ocean_current_v",
+            "ocean_current_speed",
+            "ocean_chl",
+        ),
+    },
+    "all_ocean": {
+        "label": "All Ocean",
+        "features": tuple(OCEAN_FEATURES),
+    },
+}
+
+ABLATION_BASE_FEATURES = [
+    *ENV_FEATURES,
+    *CONTEXT_FEATURES,
+    "method",
+]
+
+ABLATION_CAT_FEATURES = [
+    *CONTEXT_FEATURES,
+    "method",
+]
+
 SPECIES_TARGETS = {
     "전체 어획": "catch_total",
     "S/J": "catch_sj",
@@ -786,11 +848,332 @@ def run_experiment_suite(
     return pd.DataFrame(rows), results
 
 
+def _ablation_specs(
+    group_key: str,
+) -> tuple[ExperimentSpec, ExperimentSpec]:
+    if group_key not in ABLATION_GROUPS:
+        raise ValueError(
+            f"알 수 없는 Ablation 그룹: {group_key}"
+        )
+
+    group = ABLATION_GROUPS[group_key]
+    addon_features = tuple(group["features"])
+    label = str(group["label"])
+
+    baseline = ExperimentSpec(
+        key=f"ablation_{group_key}_baseline",
+        label=f"{label} · 동일표본 V2",
+        description=(
+            f"{label} 데이터가 존재하는 동일 표본에서 "
+            "Copernicus 변수를 제외한 기준 모델"
+        ),
+        method_filter=None,
+        features=tuple(ABLATION_BASE_FEATURES),
+        cat_features=tuple(ABLATION_CAT_FEATURES),
+        required_non_null_features=addon_features,
+    )
+
+    enhanced_features = list(
+        dict.fromkeys(
+            [
+                *ABLATION_BASE_FEATURES,
+                *addon_features,
+            ]
+        )
+    )
+    enhanced = ExperimentSpec(
+        key=f"ablation_{group_key}_enhanced",
+        label=f"{label} 추가",
+        description=(
+            f"동일 표본에서 {label} 변수를 추가한 모델"
+        ),
+        method_filter=None,
+        features=tuple(enhanced_features),
+        cat_features=tuple(ABLATION_CAT_FEATURES),
+        required_non_null_features=addon_features,
+    )
+
+    return baseline, enhanced
+
+
+def _ablation_pair_for_split(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    baseline_spec: ExperimentSpec,
+    enhanced_spec: ExperimentSpec,
+    target_col: str,
+    iterations: int,
+) -> tuple[ExperimentResult, ExperimentResult]:
+    baseline_result = _fit_once(
+        train=train,
+        test=test,
+        spec=baseline_spec,
+        target_col=target_col,
+        iterations=iterations,
+        with_shap=False,
+    )
+    enhanced_result = _fit_once(
+        train=train,
+        test=test,
+        spec=enhanced_spec,
+        target_col=target_col,
+        iterations=iterations,
+        with_shap=False,
+    )
+    return baseline_result, enhanced_result
+
+
+def run_ocean_ablation(
+    df: pd.DataFrame,
+    target_col: str = "catch_total",
+    group_keys: list[str] | None = None,
+    iterations: int = 220,
+) -> pd.DataFrame:
+    keys = group_keys or list(
+        ABLATION_GROUPS.keys()
+    )
+    rows: list[dict] = []
+
+    for key in keys:
+        baseline_spec, enhanced_spec = (
+            _ablation_specs(key)
+        )
+        label = ABLATION_GROUPS[key]["label"]
+
+        try:
+            work = _prepare_frame(
+                df,
+                enhanced_spec,
+                target_col,
+            )
+            if len(work) < 150:
+                raise ValueError(
+                    f"유효 데이터가 {len(work):,}건으로 부족합니다."
+                )
+
+            train, test, split_note = (
+                _temporal_split(work)
+            )
+            if len(test) < 30:
+                raise ValueError(
+                    f"검증 데이터가 {len(test):,}건으로 부족합니다."
+                )
+
+            baseline_result, enhanced_result = (
+                _ablation_pair_for_split(
+                    train=train,
+                    test=test,
+                    baseline_spec=baseline_spec,
+                    enhanced_spec=enhanced_spec,
+                    target_col=target_col,
+                    iterations=iterations,
+                )
+            )
+            bm = baseline_result.metrics
+            em = enhanced_result.metrics
+
+            rows.append(
+                {
+                    "key": key,
+                    "해양변수": label,
+                    "상태": "완료",
+                    "split": split_note,
+                    "rows": len(work),
+                    "test_rows": len(test),
+                    "baseline_auc": bm["roc_auc"],
+                    "enhanced_auc": em["roc_auc"],
+                    "delta_auc": (
+                        em["roc_auc"]
+                        - bm["roc_auc"]
+                    ),
+                    "baseline_top10": (
+                        bm["catch_lift_top10"]
+                    ),
+                    "enhanced_top10": (
+                        em["catch_lift_top10"]
+                    ),
+                    "delta_top10": (
+                        em["catch_lift_top10"]
+                        - bm["catch_lift_top10"]
+                    ),
+                    "baseline_mae": (
+                        bm["mae_positive_catch"]
+                    ),
+                    "enhanced_mae": (
+                        em["mae_positive_catch"]
+                    ),
+                    "delta_mae": (
+                        em["mae_positive_catch"]
+                        - bm["mae_positive_catch"]
+                    ),
+                }
+            )
+        except Exception as exc:
+            rows.append(
+                {
+                    "key": key,
+                    "해양변수": label,
+                    "상태": f"제외: {exc}",
+                    "split": "",
+                    "rows": np.nan,
+                    "test_rows": np.nan,
+                    "baseline_auc": np.nan,
+                    "enhanced_auc": np.nan,
+                    "delta_auc": np.nan,
+                    "baseline_top10": np.nan,
+                    "enhanced_top10": np.nan,
+                    "delta_top10": np.nan,
+                    "baseline_mae": np.nan,
+                    "enhanced_mae": np.nan,
+                    "delta_mae": np.nan,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def run_ocean_ablation_walk_forward(
+    df: pd.DataFrame,
+    target_col: str = "catch_total",
+    group_keys: list[str] | None = None,
+    iterations: int = 220,
+) -> pd.DataFrame:
+    keys = group_keys or list(
+        ABLATION_GROUPS.keys()
+    )
+    rows: list[dict] = []
+
+    for key in keys:
+        baseline_spec, enhanced_spec = (
+            _ablation_specs(key)
+        )
+        label = ABLATION_GROUPS[key]["label"]
+
+        try:
+            work = _prepare_frame(
+                df,
+                enhanced_spec,
+                target_col,
+            )
+        except Exception as exc:
+            rows.append(
+                {
+                    "key": key,
+                    "해양변수": label,
+                    "test_year": np.nan,
+                    "상태": f"제외: {exc}",
+                }
+            )
+            continue
+
+        years = sorted(
+            int(y)
+            for y in work["year"]
+            .dropna()
+            .unique()
+        )
+
+        for test_year in years[1:]:
+            train = work[
+                work["year"] < test_year
+            ].copy()
+            test = work[
+                work["year"] == test_year
+            ].copy()
+
+            if (
+                len(train) < 200
+                or len(test) < 30
+            ):
+                continue
+
+            try:
+                baseline_result, enhanced_result = (
+                    _ablation_pair_for_split(
+                        train=train,
+                        test=test,
+                        baseline_spec=baseline_spec,
+                        enhanced_spec=enhanced_spec,
+                        target_col=target_col,
+                        iterations=iterations,
+                    )
+                )
+                bm = baseline_result.metrics
+                em = enhanced_result.metrics
+
+                rows.append(
+                    {
+                        "key": key,
+                        "해양변수": label,
+                        "test_year": test_year,
+                        "train_years": (
+                            f"{int(train['year'].min())}"
+                            f"~{int(train['year'].max())}"
+                        ),
+                        "train_rows": len(train),
+                        "test_rows": len(test),
+                        "상태": "완료",
+                        "baseline_auc": bm["roc_auc"],
+                        "enhanced_auc": em["roc_auc"],
+                        "delta_auc": (
+                            em["roc_auc"]
+                            - bm["roc_auc"]
+                        ),
+                        "baseline_top10": (
+                            bm["catch_lift_top10"]
+                        ),
+                        "enhanced_top10": (
+                            em["catch_lift_top10"]
+                        ),
+                        "delta_top10": (
+                            em["catch_lift_top10"]
+                            - bm["catch_lift_top10"]
+                        ),
+                        "baseline_mae": (
+                            bm["mae_positive_catch"]
+                        ),
+                        "enhanced_mae": (
+                            em["mae_positive_catch"]
+                        ),
+                        "delta_mae": (
+                            em["mae_positive_catch"]
+                            - bm["mae_positive_catch"]
+                        ),
+                    }
+                )
+            except Exception as exc:
+                rows.append(
+                    {
+                        "key": key,
+                        "해양변수": label,
+                        "test_year": test_year,
+                        "train_years": (
+                            f"{int(train['year'].min())}"
+                            f"~{int(train['year'].max())}"
+                        ),
+                        "train_rows": len(train),
+                        "test_rows": len(test),
+                        "상태": f"제외: {exc}",
+                        "baseline_auc": np.nan,
+                        "enhanced_auc": np.nan,
+                        "delta_auc": np.nan,
+                        "baseline_top10": np.nan,
+                        "enhanced_top10": np.nan,
+                        "delta_top10": np.nan,
+                        "baseline_mae": np.nan,
+                        "enhanced_mae": np.nan,
+                        "delta_mae": np.nan,
+                    }
+                )
+
+    return pd.DataFrame(rows)
+
+
 def walk_forward_validate(
     df: pd.DataFrame,
     experiment_key: str,
     target_col: str = "catch_total",
-    iterations: int = 180,
+    iterations: int = 220,
 ) -> pd.DataFrame:
     if experiment_key not in EXPERIMENTS:
         raise ValueError(
