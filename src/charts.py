@@ -61,6 +61,12 @@ def historical_hotspot_map(grid: pd.DataFrame):
     if grid.empty:
         return None
 
+    grid_deg = (
+        float(grid["grid_deg"].iloc[0])
+        if "grid_deg" in grid.columns
+        else 1.0
+    )
+
     fig = px.scatter_geo(
         grid,
         lat="lat_grid",
@@ -75,9 +81,13 @@ def historical_hotspot_map(grid: pd.DataFrame):
             "historical_score": ":.1f",
             "lat_grid": False,
             "lon_grid": False,
+            "grid_deg": False,
         },
         projection="natural earth",
-        title="과거 조업 Hotspot (미래예측 아님)",
+        title=(
+            "과거 조업 Hotspot "
+            f"({grid_deg:g}° 집계 · 미래예측 아님)"
+        ),
     )
     fig.update_geos(showcoastlines=True, showcountries=True, showland=True)
     fig.update_layout(height=580)
