@@ -41,12 +41,14 @@ from src.ocean.store import (
     load_feature_store,
 )
 from src.preprocessing import (
+    coordinate_audit_summary,
+    coordinate_minute_distribution,
     preprocess_fishing_data,
     quality_report,
 )
 
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 
 
 st.set_page_config(
@@ -57,13 +59,14 @@ st.set_page_config(
 
 st.title("🐟 Tuna Hotspot AI PoC")
 st.caption(
-    f"v{APP_VERSION} · Ocean Ablation · "
+    f"v{APP_VERSION} · Coordinate Precision Audit · "
     "어장 예측 가능성 검증 PoC"
 )
 st.info(
-    "V3.1은 Copernicus 변수를 한꺼번에 넣는 데서 끝나지 않고, "
-    "SST·해류·SSH·Chl-a·SST Gradient를 개별/조합으로 추가해 "
-    "어떤 변수가 실제 AUC와 Top10 Catch Lift에 기여하는지 동일표본으로 검증합니다."
+    "V3.2는 원본 조업좌표가 1° 단위가 아니라 S0925/E15958 같은 "
+    "도분(DMM) 형식이라는 점을 명확히 검증합니다. "
+    "모델과 Copernicus 매칭은 변환된 decimal-degree 원좌표를 사용하고, "
+    "Historical Hotspot 격자는 시각화/집계 크기로만 사용합니다."
 )
 
 
@@ -308,7 +311,7 @@ summary = kpi_summary(filtered)
 ) = st.tabs(
     [
         "개요",
-        "품질/정의",
+        "품질/좌표",
         "어종 분석",
         "조업방법/CPUE",
         "Historical Hotspot",
@@ -400,6 +403,135 @@ with tab_quality:
         use_container_width=True,
         hide_index=True,
     )
+
+    st.markdown(
+        "### 좌표 정밀도 감사"
+    )
+    coord_audit = coordinate_audit_summary(
+        filtered
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "유효 좌표쌍",
+        (
+            f"{coord_audit['valid_pairs']:,} / "
+            f"{coord_audit['rows']:,}"
+        ),
+    )
+    c2.metric(
+        "좌표쌍 유효율",
+        (
+            f"{coord_audit['valid_pair_rate']:.1%}"
+            if pd.notna(
+                coord_audit[
+                    "valid_pair_rate"
+                ]
+            )
+            else "N/A"
+        ),
+    )
+    c3.metric(
+        "위도 분(minute) 종류",
+        (
+            f"{coord_audit['lat_minute_unique']} / 60"
+        ),
+    )
+    c4.metric(
+        "경도 분(minute) 종류",
+        (
+            f"{coord_audit['lon_minute_unique']} / 60"
+        ),
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric(
+        "투망행 유효 좌표율",
+        (
+            f"{coord_audit['valid_set_pair_rate']:.1%}"
+            if pd.notna(
+                coord_audit[
+                    "valid_set_pair_rate"
+                ]
+            )
+            else "N/A"
+        ),
+    )
+    c2.metric(
+        "1행 2회 이상 투망",
+        (
+            f"{coord_audit['multi_set_rows']:,} "
+            f"({coord_audit['multi_set_rate']:.1%})"
+            if pd.notna(
+                coord_audit[
+                    "multi_set_rate"
+                ]
+            )
+            else "N/A"
+        ),
+    )
+    c3.metric(
+        "좌표 표현 해상도",
+        (
+            "약 "
+            f"{coord_audit['encoded_lat_resolution_km']:.2f} km / 1′"
+        ),
+    )
+
+    st.success(
+        "원본 좌표는 S0925 = S 09°25′, "
+        "E15958 = E 159°58′ 형태입니다. "
+        "분(minute) 정보가 존재하므로 원본을 1° 단위 좌표로 "
+        "해석하면 안 됩니다."
+    )
+    st.info(
+        "AI 모델과 Copernicus Feature Store는 lat/lon의 "
+        "decimal-degree 변환값을 사용합니다. "
+        "기존 lat_grid/lon_grid 1° 값은 Historical Hotspot "
+        "집계를 위해 만든 파생값이었으며 모델 입력 좌표가 아닙니다."
+    )
+    st.warning(
+        "다만 좌표 표기가 1′ 단위라는 것과 실제 투망 GPS 정확도는 "
+        "같은 의미가 아닙니다. 특히 한 행에 투망이 2회 이상 기록되면 "
+        "여러 set에 좌표 하나만 존재하므로 set별 정확한 위치는 알 수 없습니다."
+    )
+
+    valid_coord_example = (
+        filtered[
+            filtered["lat"].notna()
+            & filtered["lon"].notna()
+        ][
+            [
+                "date",
+                "vessel",
+                "lat_raw",
+                "lon_raw",
+                "lat",
+                "lon",
+                "set_count",
+            ]
+        ]
+        .head(10)
+    )
+    with st.expander(
+        "원본 좌표 → decimal degree 예시"
+    ):
+        st.dataframe(
+            valid_coord_example,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    minute_dist = coordinate_minute_distribution(
+        filtered
+    )
+    with st.expander(
+        "분(minute) 00~59 사용 분포"
+    ):
+        st.dataframe(
+            minute_dist,
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.markdown(
         "### 당일 총어획량 ↔ 어종별 합계 확인"
@@ -674,6 +806,26 @@ with tab_hotspot:
         "탐색 점수이며, 미래 어장 예측값이 아닙니다."
     )
 
+    grid_deg = st.select_slider(
+        "집계 격자 크기",
+        options=[
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+        ],
+        value=0.25,
+        format_func=lambda x: (
+            f"{x:g}° "
+            f"(약 {x * 111:.0f} km)"
+        ),
+    )
+    st.caption(
+        "이 설정은 Historical Hotspot 표시용 집계 크기입니다. "
+        "모델/Copernicus는 원본 도분 좌표를 decimal degree로 "
+        "변환한 값을 그대로 사용합니다."
+    )
+
     min_sets = st.slider(
         "격자 최소 투망횟수",
         min_value=1,
@@ -684,6 +836,7 @@ with tab_hotspot:
     grid = hotspot_grid(
         filtered,
         min_sets=min_sets,
+        grid_deg=grid_deg,
     )
     map_fig = historical_hotspot_map(
         grid
@@ -1795,7 +1948,7 @@ with tab_walk:
 
 st.divider()
 st.caption(
-    "V3.1 판단 기준: 동일표본 Ablation과 Walk-forward에서 "
-    "특정 해양변수의 delta_auc / delta_top10이 여러 연도에 걸쳐 "
-    "반복되는지 확인합니다. 단일 연도 상승만으로 변수 효과를 확정하지 않습니다."
+    "V3.2 판단 기준: 원본 좌표의 표현 정밀도와 set-level 위치 한계를 먼저 "
+    "확인한 뒤, 동일표본 Ablation과 Walk-forward에서 해양변수의 "
+    "delta_auc / delta_top10이 여러 연도에 걸쳐 반복되는지 확인합니다."
 )
