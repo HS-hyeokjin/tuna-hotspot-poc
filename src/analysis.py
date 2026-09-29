@@ -119,15 +119,44 @@ def daily_species_consistency(
 def hotspot_grid(
     df: pd.DataFrame,
     min_sets: int = 3,
+    grid_deg: float = 1.0,
 ) -> pd.DataFrame:
+    """원본 decimal-degree 좌표를 지정 격자로 집계한다.
+
+    grid_deg는 Historical Hotspot 시각화용 집계 크기일 뿐,
+    모델이나 Copernicus 매칭 좌표의 정밀도를 바꾸지 않는다.
+    """
+    if grid_deg <= 0:
+        raise ValueError(
+            "grid_deg must be greater than 0"
+        )
+
     work = df[
         df["is_set"]
-        & df["lat_grid"].notna()
-        & df["lon_grid"].notna()
+        & df["lat"].notna()
+        & df["lon"].notna()
     ].copy()
 
     if work.empty:
         return pd.DataFrame()
+
+    work["lat_grid"] = (
+        (work["lat"] / grid_deg).round()
+        * grid_deg
+    )
+    work["lon_grid"] = (
+        (work["lon"] / grid_deg).round()
+        * grid_deg
+    )
+    work["grid_id"] = (
+        work["lat_grid"].map(
+            lambda x: f"{x:.2f}"
+        )
+        + ","
+        + work["lon_grid"].map(
+            lambda x: f"{x:.2f}"
+        )
+    )
 
     result = (
         work.groupby(
@@ -159,6 +188,7 @@ def hotspot_grid(
         result["successes"]
         / result["records"].clip(lower=1)
     )
+    result["grid_deg"] = float(grid_deg)
 
     # 과거 성과 탐색용 점수이며 미래예측 점수가 아니다.
     result["historical_score"] = (
@@ -177,3 +207,4 @@ def hotspot_grid(
         )
         .reset_index(drop=True)
     )
+
