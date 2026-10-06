@@ -434,8 +434,14 @@ def setlevel_coverage(
         ),
     }
 
+    method_work = events.copy()
+    method_work["_valid_coordinate"] = (
+        method_work["lat"].notna()
+        & method_work["lon"].notna()
+    )
+
     by_method = (
-        events.groupby(
+        method_work.groupby(
             "method",
             dropna=False,
         )
@@ -446,8 +452,8 @@ def setlevel_coverage(
                 "sum",
             ),
             valid_coordinates=(
-                "lat",
-                lambda s: int(s.notna().sum()),
+                "_valid_coordinate",
+                "sum",
             ),
             catch_total=(
                 "catch_total",
