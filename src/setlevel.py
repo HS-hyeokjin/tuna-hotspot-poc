@@ -90,6 +90,7 @@ def parse_set_coordinate(
         .strip()
         .upper()
         .replace(" ", "")
+        .replace("`", "")
     )
 
     match = _COORD_SEPARATED_RE.match(text)
