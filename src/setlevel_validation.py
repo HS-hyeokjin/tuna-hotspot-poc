@@ -345,16 +345,36 @@ def run_setlevel_regression(
                 scored["prediction"],
             )
         ),
-        "rank_corr": _rank_corr(
+        "baseline_rank_corr": _rank_corr(
+            actual,
+            scored[
+                "baseline_prediction"
+            ],
+        ),
+        "model_rank_corr": _rank_corr(
             actual,
             scored["prediction"],
         ),
-        "top10_lift": top_k_lift(
+        "baseline_top10_lift": top_k_lift(
+            actual,
+            scored[
+                "baseline_prediction"
+            ],
+            fraction=0.10,
+        ),
+        "model_top10_lift": top_k_lift(
             actual,
             scored["prediction"],
             fraction=0.10,
         ),
-        "top20_lift": top_k_lift(
+        "baseline_top20_lift": top_k_lift(
+            actual,
+            scored[
+                "baseline_prediction"
+            ],
+            fraction=0.20,
+        ),
+        "model_top20_lift": top_k_lift(
             actual,
             scored["prediction"],
             fraction=0.20,
@@ -363,6 +383,10 @@ def run_setlevel_regression(
     metrics["delta_mae"] = (
         metrics["model_mae"]
         - metrics["baseline_mae"]
+    )
+    metrics["delta_top10"] = (
+        metrics["model_top10_lift"]
+        - metrics["baseline_top10_lift"]
     )
 
     feature_importance = (
