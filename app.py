@@ -1086,6 +1086,35 @@ with tab_setlevel:
             hide_index=True,
         )
 
+        map_events = setlevel_events[
+            setlevel_events["lat"].notna()
+            & setlevel_events["lon"].notna()
+            & setlevel_events[
+                "has_positive_catch"
+            ]
+        ].copy()
+        if not map_events.empty:
+            st.plotly_chart(
+                px.scatter_geo(
+                    map_events,
+                    lat="lat",
+                    lon="lon",
+                    size="catch_total",
+                    color="method",
+                    hover_data=[
+                        "date",
+                        "vessel",
+                        "catch_total",
+                    ],
+                    projection="natural earth",
+                    title=(
+                        "2026 좌표 어획 이벤트 "
+                        "(양수 어획만 · 성공확률 지도 아님)"
+                    ),
+                ),
+                use_container_width=True,
+            )
+
         if setlevel_ocean_loaded:
             st.success(
                 "set-level Copernicus Feature Store 결합됨"
