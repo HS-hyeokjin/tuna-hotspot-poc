@@ -1199,9 +1199,12 @@ with tab_setlevel:
                         "model",
                         "baseline_mae",
                         "model_mae",
-                        "rank_corr",
-                        "top10_lift",
-                        "top20_lift",
+                        "baseline_rank_corr",
+                        "model_rank_corr",
+                        "baseline_top10_lift",
+                        "model_top10_lift",
+                        "delta_top10",
+                        "model_top20_lift",
                     ]
                     if col in completed.columns
                 ]
