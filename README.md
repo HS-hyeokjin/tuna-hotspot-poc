@@ -7,15 +7,76 @@
 
 ## 현재 브랜치
 
-`feature/v0.3.2-coordinate-audit`
+`feature/v0.3.3-positive-set-validation`
 
 - `main`: V1 baseline
 - `feature/v0.2-model-validation`: 선박/선장/조업방법 효과 분리
 - `feature/v0.3-ocean-data`: Copernicus Marine 외부 해양데이터 결합
 - `feature/v0.3.1-ocean-ablation`: 해양변수별 Ablation + Parquet Viewer
 - `feature/v0.3.2-coordinate-audit`: 원본 도분 좌표 정밀도 감사 + 가변 Hotspot grid
+- `feature/v0.3.3-positive-set-validation`: 2026 개별 어획 이벤트 기반 양수 어획량/Ranking 검증
 
 버전별 브랜치는 병합하지 않고 유지합니다.
+
+## V3.3 핵심 질문
+
+`26년 운항.xlsx`의 `26어획`에는 날짜·선박·조업방법·좌표·어획량이 함께 있는
+개별 어획 이벤트가 존재합니다.
+
+하지만 실패 투망의 GPS 위치와 정확한 투망시각은 현재 확보되지 않았습니다.
+따라서 V3.3은 **실패 위치를 임의 생성하지 않고**, 다음 범위만 검증합니다.
+
+- 좌표가 있는 양수 어획 이벤트 품질 확인
+- `26조업` 보고 투망횟수와 좌표 이벤트 수의 gap 진단
+- 성공 이벤트 내부의 어획량 회귀
+- 성공 이벤트 내부의 Top10 / Top20 Ranking
+- 위치·계절·방법 모델 vs 선박 컨텍스트 추가 모델 비교
+- 선택적으로 set-level Copernicus 일자료 결합
+
+V3.3에서는 **set-level ROC-AUC / 성공확률을 산출하지 않습니다.**
+실패 투망 좌표가 없는 상태에서 negative 위치를 만들어 분류하면
+모델 성능을 과대평가할 수 있기 때문입니다.
+
+### Set-level 입력
+
+로컬 파일:
+
+    data/26년 운항.xlsx
+
+Streamlit에서 직접 업로드할 수도 있습니다.
+
+### Set-level Copernicus 생성
+
+    python scripts/build_setlevel_ocean_features.py --input "data/26년 운항.xlsx"
+
+생성 파일:
+
+    data/external/processed/setlevel_2026_ocean_features.parquet
+
+기존 2023~2026 조업보고용 Feature Store와 분리해서 관리합니다.
+
+### V3.3 검증 구조
+
+기본 시간분할:
+
+    2026-01~06 학습
+    2026-07~09 검증
+
+모델:
+
+- 위치·계절·방법
+- 위치·계절·방법 + 선박
+- 위 모델 + Copernicus Ocean (Feature Store가 있을 때)
+
+지표:
+
+- MAE
+- Median AE
+- Rank correlation
+- Top10 Catch Lift
+- Top20 Catch Lift
+
+Baseline은 학습구간의 조업방법별 median 어획량입니다.
 
 ## V3.2 핵심 질문
 
@@ -139,28 +200,32 @@ Streamlit의 `Ocean Data` 탭에서 다음 기능을 제공합니다.
 ## 실행
 
     git fetch origin
-    git switch feature/v0.3.2-coordinate-audit
+    git switch feature/v0.3.3-positive-set-validation
     pip install -r requirements.txt
     streamlit run app.py
 
-외부 데이터가 없다면 먼저:
+기존 일단위 외부 데이터가 없다면:
 
     python scripts/build_ocean_features.py
 
+2026 set-level Ocean Feature를 만들려면:
+
+    python scripts/build_setlevel_ocean_features.py --input "data/26년 운항.xlsx"
+
 ## 권장 검증 순서
 
-1. 품질/좌표에서 Coordinate Audit 확인
-2. 원본 좌표 표현 정밀도와 다중 투망행 비율 확인
-3. Ocean Data에서 Coverage와 오류 확인
-4. AI 실험실에서 V2 / V3 전체 비교
-5. Ocean Ablation에서 2026 동일표본 비교
-6. Ocean Ablation에서 Walk-forward Ablation 실행
-7. 여러 연도에서 반복적으로 개선되는 변수 확인
-8. 실제 set별 GPS / 투망시각 확보 가능 여부 확인
-9. 이후 시간단위 해양자료 또는 +24h/+48h forecast 검증
+1. 품질/좌표에서 원본 Coordinate Audit 확인
+2. Set-level 2026에서 어획 이벤트 / 보고 투망 gap 확인
+3. Set-level 양수 어획량 모델 실행
+4. 필요 시 set-level Copernicus Feature Store 생성
+5. Ocean 모델 포함 후 MAE / Rank / Top10 Lift 비교
+6. 기존 일단위 Ocean Ablation / Walk-forward 결과와 분리해서 해석
+7. 향후 실패 투망 GPS와 투망시각 확보 시 성공/실패 분류를 새로 설계
 
 ## 주의
 
+- V3.3의 26어획 좌표 이벤트는 성공/어획 기록 중심이며 실패 투망 위치를 포함하지 않습니다.
+- 실패 투망 위치가 없으므로 V3.3 set-level 모델은 성공/실패 분류를 하지 않습니다.
 - 원본 DMM 좌표는 분 단위로 표현되지만 실제 set별 GPS 정확도를 보장하지 않습니다.
 - 한 행에 여러 set이 기록되면 좌표 하나로 각 set의 정확한 위치를 구분할 수 없습니다.
 - 외부 해양자료는 현재 일자료 기반입니다.
@@ -175,3 +240,4 @@ Streamlit의 `Ocean Data` 탭에서 다음 기능을 제공합니다.
 - `docs/V0.3_OCEAN_DATA.md`
 - `docs/V0.3.1_OCEAN_ABLATION.md`
 - `docs/V0.3.2_COORDINATE_AUDIT.md`
+- `docs/V0.3.3_POSITIVE_SET_VALIDATION.md`
