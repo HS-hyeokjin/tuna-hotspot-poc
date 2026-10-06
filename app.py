@@ -18,7 +18,7 @@ from src.charts import (
     cpue_by_temp_chart,
     historical_hotspot_map,
 )
-from src.config import DEFAULT_DATA_PATH
+from src.config import DEFAULT_DATA_PATH, SETLEVEL_DATA_PATH
 from src.loader import load_fishing_excel
 from src.model_validation import (
     ABLATION_GROUPS,
@@ -37,6 +37,7 @@ from src.ocean.config import (
 )
 from src.ocean.store import (
     DEFAULT_FEATURE_PATH,
+    SETLEVEL_FEATURE_PATH,
     attach_feature_store,
     load_feature_store,
 )
@@ -46,9 +47,17 @@ from src.preprocessing import (
     preprocess_fishing_data,
     quality_report,
 )
+from src.setlevel import (
+    load_2026_operation_counts,
+    load_setlevel_2026_excel,
+    setlevel_coverage,
+)
+from src.setlevel_validation import (
+    run_setlevel_suite,
+)
 
 
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
 
 
 st.set_page_config(
@@ -59,14 +68,14 @@ st.set_page_config(
 
 st.title("🐟 Tuna Hotspot AI PoC")
 st.caption(
-    f"v{APP_VERSION} · Coordinate Precision Audit · "
+    f"v{APP_VERSION} · Positive Set-level Validation · "
     "어장 예측 가능성 검증 PoC"
 )
 st.info(
-    "V3.2는 원본 조업좌표가 1° 단위가 아니라 S0925/E15958 같은 "
-    "도분(DMM) 형식이라는 점을 명확히 검증합니다. "
-    "모델과 Copernicus 매칭은 변환된 decimal-degree 원좌표를 사용하고, "
-    "Historical Hotspot 격자는 시각화/집계 크기로만 사용합니다."
+    "V3.3은 26년 운항.xlsx의 26어획 이벤트 좌표를 이용해 "
+    "성공/어획 이벤트 내부에서 어획량 Ranking을 검증합니다. "
+    "실패 투망의 GPS 위치와 투망시각이 없으므로 "
+    "set-level 성공/실패 분류는 수행하지 않습니다."
 )
 
 
@@ -87,6 +96,33 @@ def load_and_prepare(
         )
 
     return preprocess_fishing_data(raw)
+
+
+@st.cache_data(show_spinner=False)
+def load_setlevel_bundle(
+    uploaded_bytes: bytes | None,
+    local_path: str | None,
+):
+    if uploaded_bytes is not None:
+        events = load_setlevel_2026_excel(
+            io.BytesIO(uploaded_bytes)
+        )
+        operations = load_2026_operation_counts(
+            io.BytesIO(uploaded_bytes)
+        )
+    elif local_path:
+        events = load_setlevel_2026_excel(
+            local_path
+        )
+        operations = load_2026_operation_counts(
+            local_path
+        )
+    else:
+        raise ValueError(
+            "set-level 데이터 소스가 없습니다."
+        )
+
+    return events, operations
 
 
 @st.cache_data(show_spinner=False)
@@ -122,6 +158,9 @@ def clear_model_state() -> None:
         "v31_ablation_signature",
         "v31_ablation_walk",
         "v31_ablation_walk_signature",
+        "v33_setlevel_summary",
+        "v33_setlevel_results",
+        "v33_setlevel_signature",
     ]:
         st.session_state.pop(key, None)
 
@@ -135,6 +174,17 @@ with st.sidebar:
     use_local = st.checkbox(
         "로컬 data 폴더 파일 사용",
         value=DEFAULT_DATA_PATH.exists(),
+    )
+    st.divider()
+    st.subheader("2026 set-level")
+    setlevel_uploaded = st.file_uploader(
+        "26년 운항.xlsx 업로드",
+        type=["xlsx"],
+        key="setlevel_uploader",
+    )
+    use_setlevel_local = st.checkbox(
+        "로컬 26년 운항.xlsx 사용",
+        value=SETLEVEL_DATA_PATH.exists(),
     )
     st.caption(
         "사내 원본 데이터는 GitHub에 커밋하지 않습니다."
@@ -155,6 +205,40 @@ local_source = (
     )
     else None
 )
+
+setlevel_source_bytes = (
+    setlevel_uploaded.getvalue()
+    if setlevel_uploaded
+    else None
+)
+setlevel_local_source = (
+    str(SETLEVEL_DATA_PATH)
+    if (
+        setlevel_uploaded is None
+        and use_setlevel_local
+        and SETLEVEL_DATA_PATH.exists()
+    )
+    else None
+)
+
+setlevel_events = None
+setlevel_operations = None
+setlevel_load_error = None
+
+if (
+    setlevel_source_bytes is not None
+    or setlevel_local_source is not None
+):
+    try:
+        (
+            setlevel_events,
+            setlevel_operations,
+        ) = load_setlevel_bundle(
+            setlevel_source_bytes,
+            setlevel_local_source,
+        )
+    except Exception as exc:
+        setlevel_load_error = str(exc)
 
 if (
     source_bytes is None
@@ -196,6 +280,26 @@ if DEFAULT_FEATURE_PATH.exists():
         )
     except Exception as exc:
         ocean_load_error = str(exc)
+
+setlevel_ocean_loaded = False
+setlevel_ocean_coverage = pd.DataFrame()
+setlevel_ocean_error = None
+
+if (
+    setlevel_events is not None
+    and SETLEVEL_FEATURE_PATH.exists()
+):
+    try:
+        (
+            setlevel_events,
+            setlevel_ocean_coverage,
+        ) = attach_feature_store(
+            setlevel_events,
+            SETLEVEL_FEATURE_PATH,
+        )
+        setlevel_ocean_loaded = True
+    except Exception as exc:
+        setlevel_ocean_error = str(exc)
 
 with st.sidebar:
     st.divider()
@@ -304,6 +408,7 @@ summary = kpi_summary(filtered)
     tab_species,
     tab_method,
     tab_hotspot,
+    tab_setlevel,
     tab_ocean,
     tab_ablation,
     tab_lab,
@@ -315,6 +420,7 @@ summary = kpi_summary(filtered)
         "어종 분석",
         "조업방법/CPUE",
         "Historical Hotspot",
+        "Set-level 2026",
         "Ocean Data",
         "Ocean Ablation",
         "AI 실험실",
@@ -877,6 +983,296 @@ with tab_hotspot:
         st.info(
             "지도화할 유효 좌표/투망 데이터가 없습니다."
         )
+
+
+with tab_setlevel:
+    st.subheader(
+        "2026 Positive Set-level Validation"
+    )
+    st.warning(
+        "이 탭은 실패 투망의 GPS 위치가 없기 때문에 "
+        "성공/실패 분류를 하지 않습니다. "
+        "좌표가 있는 어획 이벤트 안에서 '어디가 더 많이 잡혔는가'를 "
+        "회귀·Ranking 관점으로만 검증합니다."
+    )
+
+    if setlevel_load_error:
+        st.error(
+            f"26년 운항.xlsx 로딩 실패: "
+            f"{setlevel_load_error}"
+        )
+    elif setlevel_events is None:
+        st.info(
+            "왼쪽에서 26년 운항.xlsx를 업로드하거나 "
+            "data/26년 운항.xlsx 파일을 배치하세요."
+        )
+    else:
+        set_summary, set_by_method = (
+            setlevel_coverage(
+                setlevel_events,
+                setlevel_operations,
+            )
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "어획 이벤트",
+            f"{set_summary['event_rows']:,}",
+        )
+        c2.metric(
+            "양수 어획 이벤트",
+            f"{set_summary['positive_event_rows']:,}",
+        )
+        c3.metric(
+            "유효 GPS 이벤트",
+            f"{set_summary['valid_coordinate_rows']:,}",
+        )
+        c4.metric(
+            "조업방법 확인",
+            f"{set_summary['method_known_rows']:,}",
+        )
+
+        if "reported_sets" in set_summary:
+            c1, c2, c3 = st.columns(3)
+            c1.metric(
+                "26조업 보고 투망수",
+                f"{set_summary['reported_sets']:.0f}",
+            )
+            c2.metric(
+                "좌표 이벤트 대응수",
+                f"{set_summary['matched_event_rows']:.0f}",
+            )
+            c3.metric(
+                "순 미위치 gap",
+                f"{set_summary['net_unlocated_gap']:.0f}",
+            )
+            st.caption(
+                "미위치 gap은 보고 투망수 - 좌표 이벤트수입니다. "
+                "실패 투망이라고 단정하지 않으며, 위치가 없는 투망/기록 차이의 "
+                "규모를 확인하는 진단값입니다."
+            )
+
+        st.dataframe(
+            set_by_method,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown("### 좌표 이벤트 예시")
+        preview_cols = [
+            "event_no",
+            "date",
+            "vessel",
+            "method",
+            "lat_raw",
+            "lon_raw",
+            "lat",
+            "lon",
+            "catch_total",
+            "catch_sj",
+            "catch_yf",
+            "catch_be",
+        ]
+        preview_cols = [
+            col
+            for col in preview_cols
+            if col in setlevel_events.columns
+        ]
+        st.dataframe(
+            setlevel_events[
+                preview_cols
+            ].head(100),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if setlevel_ocean_loaded:
+            st.success(
+                "set-level Copernicus Feature Store 결합됨"
+            )
+            st.dataframe(
+                setlevel_ocean_coverage,
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif setlevel_ocean_error:
+            st.error(
+                "set-level Ocean Feature Store 로딩 실패"
+            )
+            st.caption(setlevel_ocean_error)
+        else:
+            st.info(
+                "set-level Ocean Feature Store는 아직 없습니다. "
+                "아래 명령으로 별도 생성할 수 있습니다."
+            )
+            st.code(
+                'python scripts/build_setlevel_ocean_features.py '
+                '--input "data/26년 운항.xlsx"',
+                language="powershell",
+            )
+
+        st.markdown(
+            "### Positive-event 어획량 모델"
+        )
+        st.caption(
+            "2026-01~06을 학습하고 2026-07~09를 검증합니다. "
+            "성공확률이 아니라 양수 어획 이벤트 간 어획량/Ranking만 비교합니다."
+        )
+
+        include_ocean = st.checkbox(
+            "set-level Ocean 모델 포함",
+            value=setlevel_ocean_loaded,
+            disabled=not setlevel_ocean_loaded,
+            key="setlevel_include_ocean",
+        )
+
+        set_signature = (
+            len(setlevel_events),
+            str(
+                setlevel_events[
+                    "date"
+                ].min()
+            ),
+            str(
+                setlevel_events[
+                    "date"
+                ].max()
+            ),
+            setlevel_ocean_loaded,
+        )
+
+        if st.button(
+            "Set-level 검증 실행",
+            key="run_setlevel_suite",
+        ):
+            with st.spinner(
+                "set-level 양수 어획 이벤트 검증 중..."
+            ):
+                (
+                    setlevel_summary_df,
+                    setlevel_results,
+                ) = run_setlevel_suite(
+                    setlevel_events,
+                    include_ocean=include_ocean,
+                    target_col="catch_total",
+                )
+            st.session_state[
+                "v33_setlevel_summary"
+            ] = setlevel_summary_df
+            st.session_state[
+                "v33_setlevel_results"
+            ] = setlevel_results
+            st.session_state[
+                "v33_setlevel_signature"
+            ] = (
+                set_signature,
+                include_ocean,
+            )
+
+        if (
+            st.session_state.get(
+                "v33_setlevel_signature"
+            )
+            == (
+                set_signature,
+                include_ocean,
+            )
+            and "v33_setlevel_summary"
+            in st.session_state
+        ):
+            result_table = st.session_state[
+                "v33_setlevel_summary"
+            ]
+            st.dataframe(
+                result_table,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            completed = result_table[
+                result_table["상태"] == "완료"
+            ].copy()
+            if not completed.empty:
+                metric_cols = [
+                    col
+                    for col in [
+                        "model",
+                        "baseline_mae",
+                        "model_mae",
+                        "rank_corr",
+                        "top10_lift",
+                        "top20_lift",
+                    ]
+                    if col in completed.columns
+                ]
+                st.dataframe(
+                    completed[metric_cols],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            results = st.session_state.get(
+                "v33_setlevel_results",
+                {},
+            )
+            if results:
+                selected_key = st.selectbox(
+                    "Feature Importance 모델",
+                    list(results.keys()),
+                    format_func=lambda key: (
+                        results[key][
+                            "spec"
+                        ].label
+                    ),
+                    key="setlevel_result_key",
+                )
+                selected = results[
+                    selected_key
+                ]
+                st.plotly_chart(
+                    px.bar(
+                        selected[
+                            "feature_importance"
+                        ].head(15),
+                        x="importance",
+                        y="feature",
+                        orientation="h",
+                        title=(
+                            "Set-level Feature Importance"
+                        ),
+                    ),
+                    use_container_width=True,
+                )
+
+                scored = selected[
+                    "scored_test"
+                ]
+                show_cols = [
+                    col
+                    for col in [
+                        "date",
+                        "vessel",
+                        "method",
+                        "lat",
+                        "lon",
+                        "catch_total",
+                        "prediction",
+                        "baseline_prediction",
+                    ]
+                    if col in scored.columns
+                ]
+                st.dataframe(
+                    scored[
+                        show_cols
+                    ]
+                    .sort_values(
+                        "prediction",
+                        ascending=False,
+                    )
+                    .head(100),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 
 with tab_ocean:
@@ -1948,7 +2344,7 @@ with tab_walk:
 
 st.divider()
 st.caption(
-    "V3.2 판단 기준: 원본 좌표의 표현 정밀도와 set-level 위치 한계를 먼저 "
-    "확인한 뒤, 동일표본 Ablation과 Walk-forward에서 해양변수의 "
-    "delta_auc / delta_top10이 여러 연도에 걸쳐 반복되는지 확인합니다."
+    "V3.3 판단 기준: 실패 투망 위치가 없는 동안에는 set-level 성공확률을 "
+    "만들지 않습니다. 좌표가 있는 양수 어획 이벤트의 어획량/Ranking 성능과 "
+    "기존 일단위 Ablation을 분리해서 해석합니다."
 )
