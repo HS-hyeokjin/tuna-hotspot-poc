@@ -41,6 +41,7 @@ jobs:
           python scripts/build_ocean_features.py --help
           python scripts/coordinate_audit.py --help
           python scripts/build_setlevel_ocean_features.py --help
+          python scripts/run_setlevel_validation.py --help
 
       - name: Test
         run: python -m pytest -q
