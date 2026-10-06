@@ -208,9 +208,17 @@ Streamlit의 `Ocean Data` 탭에서 다음 기능을 제공합니다.
 
     python scripts/build_ocean_features.py
 
+2026 set-level 검증만 CLI로 실행하려면:
+
+    python scripts/run_setlevel_validation.py --input "data/26년 운항.xlsx"
+
 2026 set-level Ocean Feature를 만들려면:
 
     python scripts/build_setlevel_ocean_features.py --input "data/26년 운항.xlsx"
+
+Ocean Feature 생성 후 함께 검증하려면:
+
+    python scripts/run_setlevel_validation.py --input "data/26년 운항.xlsx" --with-ocean
 
 ## 권장 검증 순서
 
