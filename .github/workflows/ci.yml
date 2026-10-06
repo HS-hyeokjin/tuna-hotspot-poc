@@ -7,6 +7,7 @@ on:
       - feature/v0.3-ocean-data
       - feature/v0.3.1-ocean-ablation
       - feature/v0.3.2-coordinate-audit
+      - feature/v0.3.3-positive-set-validation
   pull_request:
     branches:
       - main
@@ -39,6 +40,7 @@ jobs:
         run: |
           python scripts/build_ocean_features.py --help
           python scripts/coordinate_audit.py --help
+          python scripts/build_setlevel_ocean_features.py --help
 
       - name: Test
         run: python -m pytest -q
