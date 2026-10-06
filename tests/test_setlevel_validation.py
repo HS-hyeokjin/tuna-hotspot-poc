@@ -93,7 +93,7 @@ def test_run_setlevel_regression_smoke():
     metrics = result["metrics"]
     assert metrics["train_rows"] >= 200
     assert metrics["test_rows"] >= 80
-    assert metrics["top10_lift"] > 1.0
+    assert metrics["model_top10_lift"] > 1.0
     assert not result[
         "feature_importance"
     ].empty
