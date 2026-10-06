@@ -2,6 +2,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "선망_조업보고 데이터.xlsx"
+SETLEVEL_DATA_PATH = PROJECT_ROOT / "data" / "26년 운항.xlsx"
 MODEL_DIR = PROJECT_ROOT / "models"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
