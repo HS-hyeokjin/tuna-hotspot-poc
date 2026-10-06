@@ -25,6 +25,21 @@ DEFAULT_CACHE_DIR = (
     / "cache"
 )
 
+SETLEVEL_FEATURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "external"
+    / "processed"
+    / "setlevel_2026_ocean_features.parquet"
+)
+
+SETLEVEL_CACHE_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "external"
+    / "setlevel_cache"
+)
+
 
 def load_feature_store(
     path: str | Path = DEFAULT_FEATURE_PATH,
