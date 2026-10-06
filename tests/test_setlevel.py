@@ -13,9 +13,10 @@ from src.setlevel import (
 
 def _workbook_bytes() -> BytesIO:
     catch = pd.DataFrame(
-        np.nan,
+        None,
         index=range(10),
         columns=range(25),
+        dtype=object,
     )
     header = [
         "No.",
@@ -71,9 +72,10 @@ def _workbook_bytes() -> BytesIO:
     catch.iloc[3, 23] = 10
 
     ops = pd.DataFrame(
-        np.nan,
+        None,
         index=range(8),
         columns=range(67),
+        dtype=object,
     )
     vessels = [
         "AX",
@@ -94,6 +96,9 @@ def _workbook_bytes() -> BytesIO:
     )
     ops.iloc[6, 23] = 2
     ops.iloc[6, 34] = 1
+    # Excel writer가 trailing empty columns를 제거하지 않도록
+    # 실제 26조업 폭(0~66)을 유지한다.
+    ops.iloc[6, 66] = 0
 
     buffer = BytesIO()
     with pd.ExcelWriter(
